@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+
+# Virtual env
+.venv/
+venv/
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Project outputs
+output/*
+!output/.gitkeep
+
+# Local config / secrets
+.env
+
+# SQLite
+*.db
+
+# Logs
+*.log

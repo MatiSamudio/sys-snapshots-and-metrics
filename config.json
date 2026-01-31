@@ -1,0 +1,17 @@
+{
+  "output_dir": "output",
+  "db_path": "output/metrics.db",
+
+  "disk_path": "C:\\",
+
+  "top_n_processes": 5,
+
+  "interval_seconds": 2,
+  "duration_seconds": 30,
+
+  "thresholds": {
+    "cpu_spike": 85,
+    "mem_spike": 85,
+    "disk_spike": 90
+  }
+}
