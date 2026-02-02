@@ -1,3 +1,5 @@
+import psutil
+
 def collect_top_processes(top_n: int) -> list[dict]:  #Recibe un parámetro top_n (cantidad de procesos que quieres en el ranking) y devuelve una lista de diccionarios con información de procesos.
     procesos = []
 
@@ -37,3 +39,4 @@ def collect_top_processes(top_n: int) -> list[dict]:  #Recibe un parámetro top_
         "top_ram": top_ram
     }
     return resultado
+
