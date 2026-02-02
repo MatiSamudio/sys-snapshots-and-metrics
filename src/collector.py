@@ -128,7 +128,7 @@ def obtener_snapshot_sistema(config=None):
 
 def _obtener_path_disco():
     """
-    Determina el path del disco principal según el sistema operativo.
+    Determina el path del disco principal según el sistema operativo
     
     Returns:
         str: Path del disco ('/' para Unix/Mac, 'C:\\' para Windows)
@@ -146,8 +146,8 @@ def _obtener_path_disco():
 
 def imprimir_snapshot_bonito(snapshot):
     """
-    Muestra un snapshot de forma legible en consola.
-    Útil para debugging y verificar que todo funciona.
+    Muestra un snapshot de forma legible en la consola
+    Útil para debugging y verificar que todo funcione
     
     Args:
         snapshot (dict): Snapshot a imprimir
@@ -176,13 +176,13 @@ def imprimir_snapshot_bonito(snapshot):
 
 
 # ========================================
-# BLOQUE DE PRUEBA (solo para ti)
+# BLOQUE DE PRUEBA (solo para mi)
 # ========================================
 
 if __name__ == "__main__":
     """
-    Este bloque solo se ejecuta cuando corres este archivo directamente.
-    Es para que puedas probar tu código sin depender de otros módulos.
+    Este bloque solo se ejecuta cuando se corre este archivo directamente
+    Es para poder probar el código sin depender de otros módulos
     """
     print("🧪 DEV 1: Analizando sistema completo (CPU, RAM, Disco, Red)...")
     
