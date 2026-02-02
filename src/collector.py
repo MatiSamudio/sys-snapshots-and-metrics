@@ -1,278 +1,182 @@
+# src/collector.py
 # -*- coding: utf-8 -*-
 """
-Módulo de recolección de métricas del sistema
-Responsable: Dev 1 - System Metrics (CPU/RAM/DISK/NET)
-             Dev 2 - Top Procesos
+collector.py — Recolección de métricas (SOLO captura)
 
-Responsabilidad única: Leer el estado actual del sistema operativo
-No guarda, no compara, no reporta - solo recolecta.
+Responsabilidad:
+- Leer el estado ACTUAL del sistema operativo y devolver un snapshot (dict).
+- NO guarda DB, NO calcula deltas, NO analiza, NO imprime.
+
+Contrato (schema) del snapshot (NO cambiar sin consultar):
+
+snapshot = {
+  "schema_version": 1,
+  "ts": "ISO timestamp",
+  "hostname": "string",
+  "os": {"name": "string", "release": "string"},
+  "cpu": {"percent": float},                          # 0..100
+  "mem": {"total": int, "used": int, "percent": float},# bytes y 0..100
+  "disk": {"path": "string", "total": int, "used": int, "percent": float},
+  "net": {
+    "sent": int, "recv": int,                          # counters absolutos
+    "sent_delta": None, "recv_delta": None             # deltas se calculan en runner
+  },
+  "top_processes": [
+    {"pid": int, "name": str, "cpu_percent": float, "mem_rss": int}
+  ]
+}
 """
 
-import psutil
+from __future__ import annotations
+
+from datetime import datetime, timezone
 import platform
-import socket
-from datetime import datetime
+import psutil
 
 
-# =============================================================================
-# DEV 1 — SYSTEM METRICS (CPU/RAM/DISK/NET)
-# =============================================================================
+SCHEMA_VERSION = 1
 
-def collect_system(config: dict) -> dict:
+
+def _default_disk_path() -> str:
+    """Devuelve un disk_path razonable según SO."""
+    return "C:\\" if platform.system() == "Windows" else "/"
+
+
+def _iso_now() -> str:
+    """Timestamp ISO en UTC (Z)."""
+    return datetime.now(timezone.utc).isoformat()
+
+def collect_snapshot(cfg: dict) -> dict:
     """
-    Recolecta métricas básicas del sistema operativo.
-    
+    Función única de entrada para el sistema.
+
     Args:
-        config (dict): Configuración del sistema. Debe contener:
-            - "disk_path" (str): Path del disco a medir (ej: "/" o "C:\\")
-    
+        cfg: dict con (mínimo):
+          - "disk_path": str (opcional)
+          - "top_n_processes": int (opcional)
+
     Returns:
-        dict: Snapshot con métricas del sistema en estructura fija
-              Keys: schema_version, ts, hostname, os, cpu, mem, disk, net, top_processes
+        snapshot dict completo y consistente con el schema.
     """
-    # Estructura base del snapshot según contrato de datos
-    snapshot = {
-        "schema_version": 1,
-        "ts": "",
-        "hostname": "",
-        "os": {"name": "", "release": ""},
-        "cpu": {"percent": 0.0},
-        "mem": {"total": 0, "used": 0, "percent": 0.0},
-        "disk": {"path": "", "total": 0, "used": 0, "percent": 0.0},
-        "net": {
-            "sent": 0,
-            "recv": 0,
-            "sent_delta": None,
-            "recv_delta": None
-        },
-        "top_processes": []
-    }
+    snapshot = _collect_system(cfg)
 
-    # =========================================
-    # 1. TIMESTAMP (marca de tiempo ISO)
-    # =========================================
-    try:
-        snapshot["ts"] = datetime.now().isoformat()
-    except Exception as e:
-        print(f"⚠️  Error capturando timestamp: {e}")
-        snapshot["ts"] = "unknown"
-
-    # =========================================
-    # 2. HOSTNAME (nombre de la computadora)
-    # =========================================
-    try:
-        snapshot["hostname"] = platform.node()
-    except Exception as e:
-        print(f"⚠️  Error capturando hostname: {e}")
-        snapshot["hostname"] = "unknown"
-
-    # =========================================
-    # 3. SISTEMA OPERATIVO
-    # =========================================
-    try:
-        snapshot["os"]["name"] = platform.system()
-        snapshot["os"]["release"] = platform.release()
-    except Exception as e:
-        print(f"⚠️  Error capturando OS info: {e}")
-        snapshot["os"]["name"] = "unknown"
-        snapshot["os"]["release"] = "unknown"
-
-    # =========================================
-    # 4. CPU (procesador)
-    # =========================================
-    try:
-        cpu_porcentaje = psutil.cpu_percent(interval=1)
-        snapshot["cpu"]["percent"] = round(cpu_porcentaje, 2)
-    except Exception as e:
-        print(f"⚠️  Error capturando CPU: {e}")
-        snapshot["cpu"]["percent"] = 0.0
-
-    # =========================================
-    # 5. MEMORIA RAM
-    # =========================================
-    try:
-        mem = psutil.virtual_memory()
-        snapshot["mem"]["total"] = mem.total
-        snapshot["mem"]["used"] = mem.used
-        snapshot["mem"]["percent"] = round(mem.percent, 2)
-    except Exception as e:
-        print(f"⚠️  Error capturando memoria: {e}")
-        snapshot["mem"]["total"] = 0
-        snapshot["mem"]["used"] = 0
-        snapshot["mem"]["percent"] = 0.0
-
-    # =========================================
-    # 6. DISCO DURO (usa config["disk_path"])
-    # =========================================
-    try:
-        disk_path = config.get("disk_path", _get_default_disk_path())
-        disco = psutil.disk_usage(disk_path)
-
-        snapshot["disk"]["path"] = disk_path
-        snapshot["disk"]["total"] = disco.total
-        snapshot["disk"]["used"] = disco.used
-        snapshot["disk"]["percent"] = round(disco.percent, 2)
-    except Exception as e:
-        print(f"⚠️  Error capturando disco: {e}")
-        snapshot["disk"]["path"] = config.get("disk_path", "/")
-        snapshot["disk"]["total"] = 0
-        snapshot["disk"]["used"] = 0
-        snapshot["disk"]["percent"] = 0.0
-
-    # =========================================
-    # 7. RED (net) - sent/recv acumulados
-    # =========================================
-    try:
-        red = psutil.net_io_counters()
-        snapshot["net"]["sent"] = red.bytes_sent
-        snapshot["net"]["recv"] = red.bytes_recv
-        snapshot["net"]["sent_delta"] = None
-        snapshot["net"]["recv_delta"] = None
-    except Exception as e:
-        print(f"⚠️  Error capturando red: {e}")
-        snapshot["net"]["sent"] = 0
-        snapshot["net"]["recv"] = 0
-        snapshot["net"]["sent_delta"] = None
-        snapshot["net"]["recv_delta"] = None
+    top_n = int(cfg.get("top_n_processes", 5))
+    snapshot["top_processes"] = collect_top_processes(top_n)
 
     return snapshot
 
 
-def _get_default_disk_path() -> str:
+def _collect_system(cfg: dict) -> dict:
     """
-    Función auxiliar: Determina el path del disco por defecto según el SO.
+    Captura CPU/RAM/DISK/NET/metadata.
+    Nota: net.sent/net.recv son counters absolutos.
     """
-    if platform.system() == "Windows":
-        return "C:\\"
-    else:
-        return "/"
+    disk_path = cfg.get("disk_path") or _default_disk_path()
+
+    # Estructura base cerrada (schema)
+    snapshot = {
+        "schema_version": SCHEMA_VERSION,
+        "ts": _iso_now(),
+        "hostname": platform.node() or "unknown",
+        "os": {"name": platform.system() or "unknown", "release": platform.release() or "unknown"},
+        "cpu": {"percent": 0.0},
+        "mem": {"total": 0, "used": 0, "percent": 0.0},
+        "disk": {"path": str(disk_path), "total": 0, "used": 0, "percent": 0.0},
+        "net": {"sent": 0, "recv": 0, "sent_delta": None, "recv_delta": None},
+        "top_processes": [],
+    }
+
+    # CPU: no bloquear el programa (interval=None -> lectura no bloqueante)
+    try:
+        snapshot["cpu"]["percent"] = float(psutil.cpu_percent(interval=None))
+    except Exception:
+        snapshot["cpu"]["percent"] = 0.0
+
+    # RAM
+    try:
+        m = psutil.virtual_memory()
+        snapshot["mem"]["total"] = int(m.total)
+        snapshot["mem"]["used"] = int(m.used)
+        snapshot["mem"]["percent"] = float(m.percent)
+    except Exception:
+        snapshot["mem"] = {"total": 0, "used": 0, "percent": 0.0}
+
+    # Disco
+    try:
+        d = psutil.disk_usage(disk_path)
+        snapshot["disk"]["path"] = str(disk_path)
+        snapshot["disk"]["total"] = int(d.total)
+        snapshot["disk"]["used"] = int(d.used)
+        snapshot["disk"]["percent"] = float(d.percent)
+    except Exception:
+        snapshot["disk"] = {"path": str(disk_path), "total": 0, "used": 0, "percent": 0.0}
+
+    # Red (counters absolutos)
+    try:
+        n = psutil.net_io_counters()
+        snapshot["net"]["sent"] = int(n.bytes_sent)
+        snapshot["net"]["recv"] = int(n.bytes_recv)
+        # deltas siempre None aquí (runner los completa)
+        snapshot["net"]["sent_delta"] = None
+        snapshot["net"]["recv_delta"] = None
+    except Exception:
+        snapshot["net"] = {"sent": 0, "recv": 0, "sent_delta": None, "recv_delta": None}
+
+    # Normalización mínima (rangos)
+    snapshot["cpu"]["percent"] = _clamp_percent(snapshot["cpu"]["percent"])
+    snapshot["mem"]["percent"] = _clamp_percent(snapshot["mem"]["percent"])
+    snapshot["disk"]["percent"] = _clamp_percent(snapshot["disk"]["percent"])
+
+    return snapshot
 
 
-# =============================================================================
-# DEV 2 — TOP PROCESOS
-# =============================================================================
+def _clamp_percent(x: float) -> float:
+    """Asegura 0..100 y float."""
+    try:
+        v = float(x)
+    except Exception:
+        return 0.0
+    if v < 0:
+        return 0.0
+    if v > 100:
+        return 100.0
+    return v
+
 
 def collect_top_processes(top_n: int) -> list[dict]:
     """
-    Obtiene los top N procesos ordenados por uso de CPU y RAM combinados.
-    
-    Args:
-        top_n (int): Cantidad de procesos top a retornar
-    
-    Returns:
-        list[dict]: Lista única de diccionarios con los top N procesos.
-                    Cada dict tiene: pid, name, cpu_percent, mem_rss
+    Top N procesos (best-effort) sin bloquear (sin interval por proceso).
+    Diseñado para ser rápido y tolerante a permisos.
+
+    Estrategia MVP:
+    - Captura cpu_percent "instantáneo" (puede ser 0 si no hubo warmup)
+    - Captura mem_rss
+    - Ordena por (cpu_percent desc, mem_rss desc)
     """
-    procesos = []
+    if top_n <= 0:
+        return []
 
-    # Primer muestreo de CPU (necesario para que cpu_percent tenga datos reales)
-    for proc in psutil.process_iter(['pid', 'name']):
+    procs: list[dict] = []
+
+    for proc in psutil.process_iter(["pid", "name"]):
         try:
-            proc.cpu_percent(interval=None)
+            pid = int(proc.info["pid"])
+            name = proc.info["name"] or "unknown"
+
+            # cpu_percent(None): no bloquea; puede dar 0 si no hay datos previos
+            cpu = float(proc.cpu_percent(interval=None))
+            mem_rss = int(proc.memory_info().rss)
+
+            procs.append(
+                {"pid": pid, "name": name, "cpu_percent": cpu if cpu >= 0 else 0.0, "mem_rss": mem_rss if mem_rss >= 0 else 0}
+            )
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-
-    # Segundo muestreo con intervalo para obtener valores actualizados
-    for proc in psutil.process_iter(['pid', 'name']):
-        try:
-            cpu = proc.cpu_percent(interval=0.1)
-            mem_rss = proc.memory_info().rss
-            
-            procesos.append({
-                "pid": proc.info['pid'],
-                "name": proc.info['name'] or "desconocido",
-                "cpu_percent": cpu or 0.0,
-                "mem_rss": mem_rss or 0
-            })
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except Exception:
             continue
 
-    # Normalizar: asegurar que no haya None
-    for p in procesos:
-        p["cpu_percent"] = p.get("cpu_percent", 0.0)
-        p["mem_rss"] = p.get("mem_rss", 0)
-
-    # Ordenar por CPU + RAM combinados
-    if procesos:
-        max_cpu = max(p["cpu_percent"] for p in procesos) or 1
-        max_ram = max(p["mem_rss"] for p in procesos) or 1
-        
-        for p in procesos:
-            p["_score"] = (p["cpu_percent"] / max_cpu) + (p["mem_rss"] / max_ram)
-        
-        procesos_ordenados = sorted(procesos, key=lambda x: x["_score"], reverse=True)[:top_n]
-        
-        for p in procesos_ordenados:
-            del p["_score"]
-        
-        return procesos_ordenados
-    
-    return []
+    # Ordenar por CPU y RAM
+    procs.sort(key=lambda p: (p["cpu_percent"], p["mem_rss"]), reverse=True)
+    return procs[:top_n]
 
 
-# =============================================================================
-# BLOQUE DE PRUEBA
-# =============================================================================
-
-if __name__ == "__main__":
-    import json
-
-    print("🔧 TEST: collector.py (Dev 1 + Dev 2)")
-    print("=" * 60)
-
-    # Test Dev 1
-    print("\n📍 Probando collect_system(config)...")
-    test_config = {
-        "disk_path": "C:\\" if platform.system() == "Windows" else "/"
-    }
-    
-    snapshot = collect_system(test_config)
-    
-    print(f"✅ schema_version: {snapshot['schema_version']}")
-    print(f"✅ ts: {snapshot['ts']}")
-    print(f"✅ hostname: {snapshot['hostname']}")
-    print(f"✅ os: {snapshot['os']}")
-    print(f"✅ cpu: {snapshot['cpu']}")
-    print(f"✅ mem: {snapshot['mem']}")
-    print(f"✅ disk: {snapshot['disk']}")
-    print(f"✅ net: {snapshot['net']}")
-    print(f"✅ top_processes: {snapshot['top_processes']}")
-
-    print("\n📄 JSON del snapshot:")
-    print(json.dumps(snapshot, indent=2))
-
-    # Test Dev 2
-    print("\n" + "=" * 60)
-    print("📍 Probando collect_top_processes(5)...")
-    
-    top_procs = collect_top_processes(5)
-    
-    print(f"✅ Cantidad: {len(top_procs)}")
-    
-    print("\n📄 Top 5 procesos:")
-    for i, p in enumerate(top_procs, 1):
-        mem_mb = p['mem_rss'] / (1024**2)
-        print(f"  {i}. PID:{p['pid']:>6} | {p['name']:<25} | CPU:{p['cpu_percent']:>6.2f}% | RAM:{mem_mb:>8.2f} MB")
-
-    # Verificación
-    print("\n" + "=" * 60)
-    print("🔍 VERIFICACIÓN DE CONTRATO:")
-    print("=" * 60)
-    
-    required_keys = ["schema_version", "ts", "hostname", "os", "cpu", "mem", "disk", "net", "top_processes"]
-    for key in required_keys:
-        status = "✅" if key in snapshot else "❌"
-        print(f"  {status} snapshot['{key}']")
-    
-    net_keys = ["sent", "recv", "sent_delta", "recv_delta"]
-    for key in net_keys:
-        status = "✅" if key in snapshot["net"] else "❌"
-        print(f"  {status} net['{key}']")
-    
-    if top_procs:
-        proc_keys = ["pid", "name", "cpu_percent", "mem_rss"]
-        for key in proc_keys:
-            status = "✅" if key in top_procs[0] else "❌"
-            print(f"  {status} proceso['{key}']")
-
-    print("\n✅ ¡Test completado!")
