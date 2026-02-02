@@ -1,3 +1,6 @@
+#agregar para buen funcionamiento:libreria psutil, sqlite
+
+
 import time#libreria que permite el calculo de tiempo y los intervalos
 import logging#esto nos permite mandar menjases muy detallados por categoria
 import collector#llamamos a recolector de datos
@@ -39,3 +42,4 @@ def run_capture(config: dict, db_path: str) -> None:#aca  definimos una funcion 
         time.sleep(intervalo)#nos permite editar la cantidad de segundos que habra por cada tick
 
     logging.info("Captura finalizada exitosamente.")
+
