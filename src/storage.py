@@ -97,9 +97,8 @@ def save_snapshot(db_path: str, snapshot: dict) -> int:
                 net_recv,
                 net_sent_delta,
                 net_recv_delta
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            snapshot.get("schema_version"),
             snapshot.get("ts"),
             snapshot.get("hostname"),
 
