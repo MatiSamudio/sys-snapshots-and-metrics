@@ -58,7 +58,7 @@ def run(interval: int, duration: int, cfg: dict, db_path: str) -> dict:
     end = None if duration == 0 else (start + duration)
 
     logging.info(f"RUN start interval={interval}s duration={duration}s db={db_path}")
-
+    summary=0
     try:
         while True:
             # Corte por duración
@@ -127,3 +127,4 @@ def run(interval: int, duration: int, cfg: dict, db_path: str) -> dict:
     }
     logging.info(f"RUN end {summary}")
     return summary
+
