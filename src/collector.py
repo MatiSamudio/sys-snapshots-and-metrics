@@ -10,7 +10,6 @@ Responsabilidad:
 Contrato (schema) del snapshot (NO cambiar sin consultar):
 
 snapshot = {
-  "schema_version": 1,
   "ts": "ISO timestamp",
   "hostname": "string",
   "os": {"name": "string", "release": "string"},
@@ -32,9 +31,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import platform
 import psutil
-
-
-SCHEMA_VERSION = 1
 
 
 def _default_disk_path() -> str:
@@ -75,7 +71,6 @@ def _collect_system(cfg: dict) -> dict:
 
     # Estructura base cerrada (schema)
     snapshot = {
-        "schema_version": SCHEMA_VERSION,
         "ts": _iso_now(),
         "hostname": platform.node() or "unknown",
         "os": {"name": platform.system() or "unknown", "release": platform.release() or "unknown"},
