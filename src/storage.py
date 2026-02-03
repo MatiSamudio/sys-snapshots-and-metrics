@@ -1,6 +1,10 @@
 import sqlite3
+from datetime import datetime, timedelta
 
-# Falto revisar mi codigo a detalle, sali por urgencia
+import runner
+
+snapshot_id = 0 # variable donde se va a guardar el id del ultimo snapshot 
+
 # =========================================================
 # Inicializa la base de datos
 # Crea las tablas si no existen
@@ -17,8 +21,7 @@ def init_db(db_path: str) -> None:
     # Tabla principal: un snapshot = una fila
     cur.execute("""
         CREATE TABLE IF NOT EXISTS snapshots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            schema_version INTEGER,
+            id INTEGER PRIMARY KEY,
             ts TEXT,
             hostname TEXT,
 
@@ -46,13 +49,12 @@ def init_db(db_path: str) -> None:
     # Tabla secundaria: muchos procesos por snapshot
     cur.execute("""
         CREATE TABLE IF NOT EXISTS process_samples (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            snapshot_id INTEGER,
+            id INTEGER PRIMARY KEY,
+            ts TEXT,
             pid INTEGER,
             name TEXT,
             cpu_percent REAL,
-            mem_rss INTEGER,
-            FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
+            mem_rss INTEGER
         )
     """)
 
@@ -131,14 +133,14 @@ def save_snapshot(db_path: str, snapshot: dict) -> int:
         for proc in snapshot.get("top_processes", []):
             cur.execute("""
                 INSERT INTO process_samples (
-                    snapshot_id,
+                    ts,
                     pid,
                     name,
                     cpu_percent,
                     mem_rss
                 ) VALUES (?, ?, ?, ?, ?)
             """, (
-                snapshot_id,
+                proc.get("ts"),
                 proc.get("pid"),
                 proc.get("name"),
                 proc.get("cpu_percent"),
@@ -154,7 +156,41 @@ def save_snapshot(db_path: str, snapshot: dict) -> int:
     except Exception as e:
         # Si algo falla: rollback total
         conn.rollback()
-        raise e
+        # raise e > a evaluar a detalle como aplicar dentro del log. Comentado para que no pare la ejecucion de los otros snapshots 
 
     finally:
         conn.close()
+
+
+
+#=========   koa la query 100% real no feik   =======
+
+results_query = 0 # Esta variable, actualizada como lista con tuplas, es lo consume el analyzer de Carlos.
+
+def get_snapshots(db_path):
+    
+    duration = runner.summary["duration"]
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    
+    cur.execute("SELECT ts FROM snapshots WHERE id = ?", (snapshot_id,))
+    last_ts = cur.fetchone()[0]
+
+    last_datetime = datetime.fromisoformat(last_ts)
+    start_ts = (last_datetime - timedelta(seconds=duration)).isoformat()
+    
+    query = """
+        SELECT s.*, p.pid, p.name, p.cpu_percent as proc_cpu, p.mem_rss
+        FROM snapshots s
+        INNER JOIN process_samples p ON s.ts = p.ts
+        WHERE s.ts >= ? AND s.ts <= ?
+        ORDER BY s.ts ASC
+    """
+    
+    cur.execute(query, (start_ts, last_ts))
+    results = cur.fetchall()
+    conn.close()
+    results_query.append(results)
+
+    return results_query
