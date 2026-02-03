@@ -10,10 +10,10 @@ snapshot_id = 0 # variable donde se va a guardar el id del ultimo snapshot
 # Crea las tablas si no existen
 # =========================================================
 def init_db(db_path: str) -> None:
-    """
-    Crea el archivo SQLite y define el schema.
-    Si las tablas ya existen, no hace nada.
-    """
+
+    # Crea el archivo SQLite y define el schema.
+    # Si las tablas ya existen, no hace nada.
+
 
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
@@ -66,11 +66,11 @@ def init_db(db_path: str) -> None:
 # Guarda un snapshot completo de forma atómica
 # =========================================================
 def save_snapshot(db_path: str, snapshot: dict) -> int:
-    """
-    Inserta un snapshot completo en la base.
-    Si algo falla, no se guarda nada.
-    Devuelve el snapshot_id generado.
-    """
+    
+    # Inserta un snapshot completo en la base.
+    # Si algo falla, no se guarda nada.
+    # Devuelve el snapshot_id generado.
+
 
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
@@ -81,7 +81,6 @@ def save_snapshot(db_path: str, snapshot: dict) -> int:
         # -------------------------------
         cur.execute("""
             INSERT INTO snapshots (
-                schema_version,
                 ts,
                 hostname,
                 os_name,
@@ -165,7 +164,7 @@ def save_snapshot(db_path: str, snapshot: dict) -> int:
 
 #=========   koa la query 100% real no feik   =======
 
-results_query = 0 # Esta variable, actualizada como lista con tuplas, es lo consume el analyzer de Carlos.
+results_query = 0 # Esta variable, una vez que se actualiza, pasa una lista con tuplas, y eso es lo consume el analyzer de Carlos.
 
 def get_snapshots(db_path):
     
