@@ -30,5 +30,17 @@ output/*
 # Logs
 *.log
 
+# build artifacts
+/dist/
+/build/
+*.spec
+*.zip
 
-*.reports/ 
+# runtime outputs
+/reports/
+/snapshots.db
+
+# python cache
+__pycache__/
+*.pyc
+
