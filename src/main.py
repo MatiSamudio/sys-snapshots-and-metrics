@@ -72,27 +72,40 @@ def resolve_report_path(cli_out: str | None) -> Path:
 # =========================================================
 def run_auto() -> int:
     """
-    Modo automático:
+    Autorun (doble click / sin args):
+    - Resetea snapshots.db (para no mezclar corridas)
     - init-db
     - run (captura)
-    - report
-    Todo relativo al directorio del exe.
+    - report.md + report.html (+ PNG si aplica)
+    - abre report.html en el navegador
+    Todo dentro de la carpeta del .exe (portable).
     """
-
-
-    # Carpeta donde está el exe (o el script si no está empaquetado)
-    base_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+    # Base: carpeta del .exe si está empaquetado; si no, raíz del repo
+    base_dir = (
+        Path(sys.executable).resolve().parent
+        if getattr(sys, "frozen", False)
+        else Path(__file__).resolve().parent.parent
+    )
 
     db_path = base_dir / "snapshots.db"
     reports_dir = base_dir / "reports"
-    reports_dir.mkdir(exist_ok=True)
+    reports_dir.mkdir(parents=True, exist_ok=True)
 
     report_path = reports_dir / "report.md"
+    html_path = reports_dir / "report.html"
 
-    # 1) init db
+    # 0) Reset DB en cada autorun (evita ruido entre corridas/máquinas)
+    try:
+        if db_path.exists():
+            db_path.unlink()
+    except Exception:
+        # Si está bloqueado, no detenemos el autorun (reusará la DB existente)
+        pass
+
+    # 1) init db (idempotente)
     storage.init_db(str(db_path))
 
-    # 2) run captura (ajustá a gusto)
+    # 2) run captura
     runner.run(
         interval=2,
         duration=20,
@@ -100,10 +113,18 @@ def run_auto() -> int:
         db_path=str(db_path),
     )
 
-    # 3) report
+    # 3) report (MD + HTML)
     snapshots = storage.get_snapshots(str(db_path), last_lines=50)
     analysis = analyzer.analyze(snapshots, CFG)
+
     report.write_report(analysis, str(report_path))
+    report.write_report_html(str(report_path), str(html_path))
+
+    # 4) abrir en navegador
+    try:
+        os.startfile(str(html_path))
+    except Exception:
+        pass
 
     return 0
 

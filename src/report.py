@@ -1,18 +1,13 @@
 # src/report.py
 # -*- coding: utf-8 -*-
 """
-report.py — Reporte (Markdown + gráficos opcionales por defecto ON)
+report.py — Reporte
 
 Contrato:
 - NO ejecuta nada al import.
-- NO decide paths globales; usa out_path que le pasa main.
 - NO lee DB.
-- Expone: write_report(analysis, out_path) -> None
-
-Comportamiento:
-- Escribe Markdown en out_path
-- Genera un PNG de barras (avg vs max) en el MISMO directorio del reporte
-- Inserta la imagen con ruta relativa (solo filename)
+- write_report(analysis, out_path): escribe Markdown
+- write_report_html(md_path, html_path): convierte MD a HTML y lo escribe
 """
 
 from __future__ import annotations
@@ -24,20 +19,54 @@ from typing import Any
 def write_report(analysis: dict, out_path: str) -> None:
     out = Path(out_path)
 
-    # 1) generar gráfico (si hay datos) y obtener nombre relativo para embed
     chart_name = _maybe_write_chart_png(analysis or {}, out)
-
-    # 2) render markdown (incluye imagen si existe)
     md = _render_markdown(analysis or {}, chart_name)
 
-    # 3) escribir MD
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(md, encoding="utf-8")
 
 
-# =========================
-# Charts (matplotlib safe)
-# =========================
+def write_report_html(md_path: str, html_path: str) -> None:
+    """
+    Convierte un .md existente a HTML y lo guarda.
+    Requiere: pip install markdown
+    """
+    md_file = Path(md_path)
+    html_file = Path(html_path)
+
+    text = md_file.read_text(encoding="utf-8")
+
+    # Render real de Markdown
+    import markdown as md
+    body = md.markdown(
+        text,
+        extensions=["tables", "fenced_code"],
+        output_format="html5",
+    )
+
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>System snapshots report</title>
+<style>
+  body {{ font-family: Arial, sans-serif; margin: 24px; }}
+  code, pre {{ font-family: Consolas, monospace; }}
+  table {{ border-collapse: collapse; width: 100%; }}
+  th, td {{ border: 1px solid #ccc; padding: 8px; text-align: left; }}
+  th {{ background: #f5f5f5; }}
+</style>
+</head>
+<body>
+{body}
+</body>
+</html>"""
+
+    html_file.parent.mkdir(parents=True, exist_ok=True)
+    html_file.write_text(html, encoding="utf-8")
+
+
 def _maybe_write_chart_png(analysis: dict, out: Path) -> str | None:
     count = int(analysis.get("count", 0) or 0)
     if count <= 0:
@@ -48,7 +77,6 @@ def _maybe_write_chart_png(analysis: dict, out: Path) -> str | None:
     mem = metrics.get("mem_percent") or {}
     disk = metrics.get("disk_percent") or {}
 
-    # si faltan promedios o máximos, no graficar
     if cpu.get("avg") is None or cpu.get("max") is None:
         return None
     if mem.get("avg") is None or mem.get("max") is None:
@@ -56,16 +84,14 @@ def _maybe_write_chart_png(analysis: dict, out: Path) -> str | None:
     if disk.get("avg") is None or disk.get("max") is None:
         return None
 
-    # Backend no-GUI: crítico para PyInstaller/Windows
     import matplotlib
-    matplotlib.use("Agg")  # must be set BEFORE pyplot
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     labels = ["CPU", "Memory", "Disk"]
     avg_values = [float(cpu["avg"]), float(mem["avg"]), float(disk["avg"])]
     max_values = [float(cpu["max"]), float(mem["max"]), float(disk["max"])]
 
-    # nombre estable basado en el reporte (misma carpeta)
     png_path = out.with_suffix("")  # report.md -> report
     png_file = f"{png_path.name}_resources.png"
     png_full = out.parent / png_file
@@ -87,13 +113,9 @@ def _maybe_write_chart_png(analysis: dict, out: Path) -> str | None:
     fig.savefig(png_full)
     plt.close(fig)
 
-    # embed con ruta relativa (solo filename)
     return png_file
 
 
-# =========================
-# Markdown rendering
-# =========================
 def _render_markdown(analysis: dict, chart_name: str | None) -> str:
     tr = analysis.get("time_range") or {}
     count = int(analysis.get("count", 0) or 0)
@@ -111,7 +133,8 @@ def _render_markdown(analysis: dict, chart_name: str | None) -> str:
     lines: list[str] = []
     lines.append("# System snapshots report")
     lines.append("")
-    lines.append(f"- Time range: `{tr.get('start')}` → `{tr.get('end')}`")
+    # ASCII estable
+    lines.append(f"- Time range: `{tr.get('start')}` -> `{tr.get('end')}`")
     lines.append(f"- Snapshots analyzed: **{count}**")
     lines.append("")
 
@@ -150,7 +173,7 @@ def _render_markdown(analysis: dict, chart_name: str | None) -> str:
             ds = a.get("net_sent_delta")
             dr = a.get("net_recv_delta")
             lines.append(
-                f"- `{ts}` — {reasons} "
+                f"- `{ts}` - {reasons} "
                 f"(cpu={cpu_p}%, mem={mem_p}%, "
                 f"sent_delta={fmt_bytes(ds) if ds is not None else 'None'}, "
                 f"recv_delta={fmt_bytes(dr) if dr is not None else 'None'})"
@@ -174,7 +197,6 @@ def _render_markdown(analysis: dict, chart_name: str | None) -> str:
     mem_last = last.get("mem") or {}
     disk_last_raw = last.get("disk") or {}
     net_last = last.get("net") or {}
-
     os_info = last.get("os") or {}
 
     lines.append(f"- ts: `{last.get('ts')}`")
@@ -213,25 +235,22 @@ def _render_markdown(analysis: dict, chart_name: str | None) -> str:
     return "\n".join(lines)
 
 
-# =========================
-# Formatting helpers
-# =========================
 def fmt_num(x: Any) -> str:
     if x is None:
-        return "—"
+        return "-"
     try:
         return f"{float(x):.2f}"
     except Exception:
-        return "—"
+        return "-"
 
 
 def fmt_bytes(x: Any) -> str:
     if x is None:
-        return "—"
+        return "-"
     try:
         n = int(x)
     except Exception:
-        return "—"
+        return "-"
     if n < 0:
         n = 0
     units = ["B", "KB", "MB", "GB", "TB", "PB"]
