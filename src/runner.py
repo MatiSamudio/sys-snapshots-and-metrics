@@ -21,9 +21,9 @@ from __future__ import annotations
 import time
 import logging
 
-import collector
-import storage 
-summary=0
+from src import collector
+from src import storage
+
 
 def run(interval: int, duration: int, cfg: dict, db_path: str) -> dict:
     """

@@ -1,157 +1,131 @@
-from storage import get_snapshots
+# src/analyzer.py
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+from typing import Any
 
-# simulamos lo que devolvería get_snapshots()
+def analyze(snapshots: list[dict], cfg: dict) -> dict:
+    anomalies_cfg = (cfg or {}).get("anomalies") or {}
+    cpu_hi = float(anomalies_cfg.get("cpu_percent_high", 90.0))
+    mem_hi = float(anomalies_cfg.get("mem_percent_high", 90.0))
+    net_hi = anomalies_cfg.get("net_delta_high", None)
+    net_hi = None if net_hi is None else int(net_hi)
 
-# def get_snapshots():
-#     return [
-#         # id, ts, hostname, os_name, os_release,
-#         # cpu_percent, mem_total, mem_used, mem_percent,
-#         # disk_path, disk_total, disk_used, disk_percent,
-#         # net_sent, net_recv, net_sent_delta, net_recv_delta,
-#         # pid, name, proc_cpu, proc_mem_used
+    if not snapshots:
+        return {
+            "time_range": {"start": None, "end": None},
+            "count": 0,
+            "metrics": {
+                "cpu_percent": {"min": None, "avg": None, "max": None},
+                "mem_percent": {"min": None, "avg": None, "max": None},
+                "disk_percent": {"min": None, "avg": None, "max": None},
+            },
+            "disk": {"path": None, "last_percent": None},
+            "net": {"sent_total": 0, "recv_total": 0, "deltas_ignored": 0},
+            "anomalies": [],
+            "last_snapshot": None,
+            "series": {"cpu_percent": [], "mem_percent": [], "disk_percent": []},
+        }
 
-#         (1, "2026-02-03 18:30:00", "server1", "Linux", "5.15",
-#          45.0, 16000, 8000, 50.0,
-#          "/", 100000, 50000, 50.0,
-#          1000000, 2000000, 200000, 400000,
-#          101, "nginx", 5.0, 120000),
+    def num(x: Any, default: float = 0.0) -> float:
+        try:
+            v = float(x)
+            return v
+        except Exception:
+            return float(default)
 
-#         (1, "2026-02-03 18:30:00", "server1", "Linux", "5.15",
-#          45.0, 16000, 8000, 50.0,
-#          "/", 100000, 50000, 50.0,
-#          1000000, 2000000, 200000, 400000,
-#          102, "postgres", 10.0, 250000),
+    def int_or_none(x: Any):
+        if x is None:
+            return None
+        try:
+            return int(x)
+        except Exception:
+            return None
 
-#         (2, "2026-02-03 18:35:00", "server1", "Linux", "5.15",
-#          70.0, 16000, 12000, 75.0,
-#          "/", 100000, 80000, 80.0,
-#          2000000, 3000000, 300000, 500000,
-#          103, "python", 20.0, 500000),
+    # asume cronológico (storage lo garantiza)
+    start_ts = snapshots[0].get("ts")
+    end_ts = snapshots[-1].get("ts")
 
-#         (2, "2026-02-03 18:35:00", "server1", "Linux", "5.15",
-#          70.0, 16000, 12000, 75.0,
-#          "/", 100000, 80000, 80.0,
-#          2000000, 3000000, 300000, 500000,
-#          104, "redis", 15.0, 150000),
-#     ]
+    cpu_vals: list[float] = []
+    mem_vals: list[float] = []
+    disk_vals: list[float] = []
 
-def summarize():
-    rows = get_snapshots()
+    sent_total = 0
+    recv_total = 0
+    deltas_ignored = 0
+    anomalies: list[dict] = []
 
-    if rows is None or len(rows) == 0:
-        return "El snapshot está vacío"
+    for s in snapshots:
+        ts = s.get("ts")
 
-    # Umbrales de uso para anomalías extremas
+        cpu_p = num(((s.get("cpu") or {}).get("percent")), 0.0)
+        mem_p = num(((s.get("mem") or {}).get("percent")), 0.0)
+        disk_p = num(((s.get("disk") or {}).get("percent")), 0.0)
 
-    threshold_cpu = 89.9
-    threshold_mem = 89.9
-    threshold_disk = 95.0
-    threshold_net = 960000000
+        cpu_vals.append(cpu_p)
+        mem_vals.append(mem_p)
+        disk_vals.append(disk_p)
 
-    # Reconstruimos snapshots agrupando por id
+        reasons: list[str] = []
+        if cpu_p >= cpu_hi:
+            reasons.append(f"cpu_percent_high (>= {cpu_hi})")
+        if mem_p >= mem_hi:
+            reasons.append(f"mem_percent_high (>= {mem_hi})")
 
-    snapshots = {}
-    for row in rows:
-        (
-            id, ts, hostname, os_name, os_release,
-            cpu_percent, mem_total, mem_used, mem_percent,
-            disk_path, disk_total, disk_used, disk_percent,
-            net_sent, net_recv, net_sent_delta, net_recv_delta,
-            pid, name, proc_cpu, proc_mem_used
-        ) = row
+        net = s.get("net") or {}
+        ds = int_or_none(net.get("sent_delta"))
+        dr = int_or_none(net.get("recv_delta"))
 
-        if id not in snapshots:
-            snapshots[id] = {
-                "id": id,
+        if ds is None:
+            deltas_ignored += 1
+        else:
+            if ds < 0: ds = 0
+            sent_total += ds
+            if net_hi is not None and ds >= net_hi:
+                reasons.append(f"net_sent_delta_high (>= {net_hi})")
+
+        if dr is None:
+            deltas_ignored += 1
+        else:
+            if dr < 0: dr = 0
+            recv_total += dr
+            if net_hi is not None and dr >= net_hi:
+                reasons.append(f"net_recv_delta_high (>= {net_hi})")
+
+        if reasons:
+            anomalies.append({
                 "ts": ts,
-                "hostname": hostname,
-                "os_name": os_name,
-                "os_release": os_release,
-                "cpu": {"percent": cpu_percent},
-                "mem": {"total": mem_total, "used": mem_used, "percent": mem_percent},
-                "disk": {"path": disk_path, "total": disk_total, "used": disk_used, "percent": disk_percent},
-                "net": {"sent": net_sent, "recv": net_recv, "sent_delta": net_sent_delta, "recv_delta": net_recv_delta},
-                "top_processes": []
-            }
+                "reasons": reasons,
+                "cpu_percent": cpu_p,
+                "mem_percent": mem_p,
+                "disk_percent": disk_p,
+                "net_sent_delta": ds,
+                "net_recv_delta": dr,
+            })
 
-        snapshots[id]["top_processes"].append({
-            "pid": pid,
-            "name": name,
-            "cpu_percent": proc_cpu,
-            "mem_rss": proc_mem_used
-        })
+    def min_avg_max(vals: list[float]) -> dict:
+        if not vals:
+            return {"min": None, "avg": None, "max": None}
+        return {
+            "min": min(vals),
+            "avg": (sum(vals) / len(vals)),
+            "max": max(vals),
+        }
 
-    # Convertimos a lista ordenada por timestamp
+    last_disk = snapshots[-1].get("disk") or {}
+    disk_path = last_disk.get("path")
+    disk_last_percent = num(last_disk.get("percent"), 0.0)
 
-    snapshots = sorted(snapshots.values(), key=lambda s: s["ts"])
-
-    # Inicializamos acumuladores
-
-    cpu_values = [s["cpu"]["percent"] for s in snapshots]
-    mem_percent = [s["mem"]["percent"] for s in snapshots]
-    disk_percent = [s["disk"]["percent"] for s in snapshots]
-    net_sent = [s["net"]["sent"] for s in snapshots]
-    net_recv = [s["net"]["recv"] for s in snapshots]
-
-    anomalies = []
-    extreme_anomalies = []
-
-    # Calculamos promedios y máximos
-
-    avg_cpu = sum(cpu_values) / len(cpu_values)
-    max_cpu = max(cpu_values)
-
-    avg_mem = sum(mem_percent) / len(mem_percent)
-    max_mem = max(mem_percent)
-
-    avg_disk = sum(disk_percent) / len(disk_percent)
-    max_disk = max(disk_percent)
-
-    avg_net_sent = sum(net_sent) / len(net_sent)
-    max_net_sent = max(net_sent)
-
-    avg_net_recv = sum(net_recv) / len(net_recv)
-    max_net_recv = max(net_recv)
-
-    # Detectamos anomalías en el último snapshot
-
-    last = snapshots[-1]
-
-    if last["cpu"]["percent"] > threshold_cpu:
-        extreme_anomalies.append({"ts": last["ts"], "reason": "Uso de CPU muy alto"})
-    elif last["cpu"]["percent"] > avg_cpu + 15:
-        anomalies.append({"ts": last["ts"], "reason": "Uso de CPU por encima del 15% promedio"})
-    elif avg_cpu + 5 < last["cpu"]["percent"] <= avg_cpu + 10:
-        anomalies.append({"ts": last["ts"], "reason": "Uso de CPU por encima del 5% promedio"})
-
-    if last["mem"]["percent"] > threshold_mem:
-        extreme_anomalies.append({"ts": last["ts"], "reason": "Uso de memoria muy alto"})
-    elif last["mem"]["percent"] > avg_mem + 15:
-        anomalies.append({"ts": last["ts"], "reason": "Uso de memoria por encima del 15% promedio"})
-    elif avg_mem + 5 < last["mem"]["percent"] <= avg_mem + 10:
-        anomalies.append({"ts": last["ts"], "reason": "Uso de memoria por encima del 5% promedio"})
-
-    if last["disk"]["percent"] > threshold_disk:
-        extreme_anomalies.append({"ts": last["ts"], "reason": "Uso de disco muy alto"})
-
-    if last["net"]["sent"] > threshold_net or last["net"]["recv"] > threshold_net:
-        extreme_anomalies.append({"ts": last["ts"], "reason": "Uso de red muy alto"})
-
-    # Creamos el resumen
-
-    summary = {
-        "time_range": {"start": snapshots[0]["ts"], "end": snapshots[-1]["ts"]},
+    return {
+        "time_range": {"start": start_ts, "end": end_ts},
         "count": len(snapshots),
         "metrics": {
-            "cpu": {"avg": avg_cpu, "max": max_cpu},
-            "mem": {"avg": avg_mem, "max": max_mem},
-            "disk": {"avg": avg_disk, "max": max_disk},
-            "net_sent": {"avg": avg_net_sent, "max": max_net_sent},
-            "net_recv": {"avg": avg_net_recv, "max": max_net_recv}
+            "cpu_percent": min_avg_max(cpu_vals),
+            "mem_percent": min_avg_max(mem_vals),
+            "disk_percent": min_avg_max(disk_vals),
         },
+        "disk": {"path": disk_path, "last_percent": disk_last_percent},
+        "net": {"sent_total": sent_total, "recv_total": recv_total, "deltas_ignored": deltas_ignored},
         "anomalies": anomalies,
-        "extreme_anomalies": extreme_anomalies,
-        "last_snapshot": last
+        "last_snapshot": snapshots[-1],
+        "series": {"cpu_percent": cpu_vals, "mem_percent": mem_vals, "disk_percent": disk_vals},
     }
-
-    return summary, cpu_values, mem_percent, disk_percent
