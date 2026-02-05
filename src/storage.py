@@ -1,5 +1,14 @@
-# src/storage.py
-# -*- coding: utf-8 -*-
+"""
+SQLite database storage module for system snapshots.
+
+Responsibilities:
+- Initialize database schema with snapshots and process_samples tables
+- Save complete snapshots atomically with transaction support
+- Retrieve snapshots with full process data rehydration
+
+The module maintains a 1:N relationship between snapshots and process samples,
+using foreign keys and indexes for efficient querying.
+"""
 
 from __future__ import annotations
 
@@ -7,14 +16,26 @@ import sqlite3
 
 
 # =========================================================
-# Inicializa la base de datos
-# Crea las tablas si no existen
+# Database Initialization
+# Creates tables if they don't exist
 # =========================================================
 def init_db(db_path: str) -> None:
+    """
+    Initialize the SQLite database with required schema.
+
+    Creates two tables:
+    - snapshots: Main table storing one row per snapshot
+    - process_samples: Secondary table storing process data (1:N with snapshots)
+
+    This operation is idempotent - safe to call multiple times.
+
+    Args:
+        db_path: Path to the SQLite database file.
+    """
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
 
-    # Tabla principal: un snapshot = una fila
+    # Main table: one snapshot = one row
     cur.execute("""
         CREATE TABLE IF NOT EXISTS snapshots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,7 +63,7 @@ def init_db(db_path: str) -> None:
         )
     """)
 
-    # Tabla secundaria: muchos procesos por snapshot (1:N)
+    # Secondary table: many processes per snapshot (1:N relationship)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS process_samples (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,7 +76,7 @@ def init_db(db_path: str) -> None:
         )
     """)
 
-    # Índice para acelerar lectura por snapshot_id
+    # Index to accelerate reads by snapshot_id
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_process_samples_snapshot_id
         ON process_samples(snapshot_id)
@@ -66,14 +87,30 @@ def init_db(db_path: str) -> None:
 
 
 # =========================================================
-# Guarda un snapshot completo de forma atómica
+# Save Complete Snapshot Atomically
 # =========================================================
 def save_snapshot(db_path: str, snapshot: dict) -> int:
+    """
+    Save a complete snapshot to the database atomically.
+
+    Inserts the snapshot into the snapshots table and related processes
+    into the process_samples table within a single transaction.
+
+    Args:
+        db_path: Path to the SQLite database file.
+        snapshot: Snapshot dictionary conforming to the collector schema.
+
+    Returns:
+        The snapshot_id (primary key) of the inserted snapshot.
+
+    Raises:
+        Exception: If database operation fails (transaction is rolled back).
+    """
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
 
     try:
-        # 1) Insertar en tabla snapshots
+        # Step 1: Insert into snapshots table
         cur.execute("""
             INSERT INTO snapshots (
                 ts,
@@ -119,7 +156,7 @@ def save_snapshot(db_path: str, snapshot: dict) -> int:
 
         snapshot_id = int(cur.lastrowid)
 
-        # 2) Insertar procesos relacionados
+        # Step 2: Insert related processes
         for proc in snapshot.get("top_processes", []) or []:
             cur.execute("""
                 INSERT INTO process_samples (
@@ -142,7 +179,7 @@ def save_snapshot(db_path: str, snapshot: dict) -> int:
 
     except Exception:
         conn.rollback()
-        # storage no silencia: runner ya tolera errores por tick y loguea
+        # Storage does not silence errors: runner handles per-tick failures
         raise
 
     finally:
@@ -150,14 +187,24 @@ def save_snapshot(db_path: str, snapshot: dict) -> int:
 
 
 # =========================================================
-# Lectura para Analyzer: EXACTAMENTE N snapshots completos
+# Read Snapshots for Analyzer (Exactly N Complete Snapshots)
 # =========================================================
 def get_snapshots(db_path: str, last_lines: int) -> list[dict]:
     """
-    Devuelve los últimos N snapshots en orden cronológico (viejo->nuevo),
-    rehidratados al schema cerrado (incluye top_processes).
+    Retrieve the last N snapshots in chronological order (oldest to newest).
 
-    Nota: no se usa JOIN+LIMIT porque eso limita filas, no snapshots.
+    Snapshots are fully rehydrated with their associated process data.
+
+    Note: We don't use JOIN+LIMIT because that limits rows, not snapshots.
+    Instead, we fetch the last N snapshots, then fetch all their processes.
+
+    Args:
+        db_path: Path to the SQLite database file.
+        last_lines: Number of most recent snapshots to retrieve.
+
+    Returns:
+        List of snapshot dictionaries in chronological order, rehydrated
+        with top_processes data.
     """
     n = int(last_lines)
     if n <= 0:
@@ -167,7 +214,7 @@ def get_snapshots(db_path: str, last_lines: int) -> list[dict]:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
-        # 1) Traer los últimos N snapshots por orden real de inserción
+        # Step 1: Fetch last N snapshots by insertion order
         snap_rows = cur.execute(
             "SELECT * FROM snapshots ORDER BY id DESC LIMIT ?",
             (n,),
@@ -176,11 +223,11 @@ def get_snapshots(db_path: str, last_lines: int) -> list[dict]:
         if not snap_rows:
             return []
 
-        # Reordenar a cronológico para period/from-to y disk last%
+        # Reverse to chronological order for period/from-to and disk last%
         snap_rows = list(reversed(snap_rows))
         ids = [int(r["id"]) for r in snap_rows]
 
-        # 2) Traer procesos SOLO de esos snapshots
+        # Step 2: Fetch processes ONLY for these snapshots
         placeholders = ",".join(["?"] * len(ids))
         proc_rows = cur.execute(
             f"""
@@ -192,7 +239,7 @@ def get_snapshots(db_path: str, last_lines: int) -> list[dict]:
             ids,
         ).fetchall()
 
-    # 3) Agrupar procesos por snapshot_id
+    # Step 3: Group processes by snapshot_id
     procs_by_id: dict[int, list[dict]] = {}
     for p in proc_rows:
         sid = int(p["snapshot_id"])
@@ -203,7 +250,7 @@ def get_snapshots(db_path: str, last_lines: int) -> list[dict]:
             "mem_rss": int(p["mem_rss"]),
         })
 
-    # 4) Rehidratar a schema cerrado
+    # Step 4: Rehydrate to closed schema
     out: list[dict] = []
     for r in snap_rows:
         sid = int(r["id"])

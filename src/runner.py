@@ -1,19 +1,17 @@
-# src/runner.py
-# -*- coding: utf-8 -*-
 """
-runner.py — Automatización (SOLO repetición + deltas + guardado)
+Automated metric collection runner module.
 
-Responsabilidad:
-- Mantener un loop por interval/duration.
-- En cada tick:
-  1) pedir snapshot crudo al collector (counters absolutos)
-  2) calcular deltas de red comparando con el tick anterior
-  3) guardar snapshot en SQLite vía storage.save_snapshot
+Responsibilities:
+- Maintain an execution loop based on interval/duration parameters
+- On each tick:
+  1) Request raw snapshot from collector (with absolute network counters)
+  2) Calculate network deltas by comparing with previous tick
+  3) Save snapshot to SQLite via storage module
 
-Reglas:
-- runner NO analiza, NO reporta.
-- deltas se calculan aquí (no en collector).
-- Debe tolerar fallos por tick (log y continuar).
+Rules:
+- Runner does NOT analyze or generate reports
+- Network deltas are calculated here (not in collector)
+- Must tolerate per-tick failures (log and continue)
 """
 
 from __future__ import annotations
@@ -27,25 +25,25 @@ from src import storage
 
 def run(interval: int, duration: int, cfg: dict, db_path: str) -> dict:
     """
-    Ejecuta un run automático.
+    Execute an automated metric collection run.
 
     Args:
-        interval: segundos entre capturas (>=1 recomendado)
-        duration: segundos totales; si 0 => hasta Ctrl+C
-        cfg: dict de config (disk_path, top_n_processes, etc.)
-        db_path: ruta al sqlite db
+        interval: Seconds between snapshots (>=1 recommended).
+        duration: Total duration in seconds; 0 => infinite (until Ctrl+C).
+        cfg: Configuration dictionary (disk_path, top_n_processes, etc.).
+        db_path: Path to the SQLite database file.
 
     Returns:
-        summary dict (útil para logs/demo)
+        Summary dictionary with execution statistics (useful for logs/demo).
     """
-    # Sanitizar inputs
+    # Sanitize inputs
     interval = int(interval)
     duration = int(duration)
 
     if interval <= 0:
         interval = 1
 
-    # Asegurar DB lista (si main ya lo hace, esto es idempotente)
+    # Ensure database is ready (idempotent if main already initialized)
     storage.init_db(db_path)
 
     prev_sent = None
@@ -61,7 +59,7 @@ def run(interval: int, duration: int, cfg: dict, db_path: str) -> dict:
    
     try:
         while True:
-            # Corte por duración
+            # Check duration cutoff
             if end is not None and time.monotonic() >= end:
                 break
 
@@ -69,26 +67,27 @@ def run(interval: int, duration: int, cfg: dict, db_path: str) -> dict:
             ticks += 1
 
             try:
-                # 1) Snapshot crudo
+                # Step 1: Collect raw snapshot
                 snap = collector.collect_snapshot(cfg)
 
-                # 2) Deltas de red (comparación entre ticks del MISMO run)
+                # Step 2: Calculate network deltas (comparison between ticks of SAME run)
                 sent = snap["net"]["sent"]
                 recv = snap["net"]["recv"]
 
                 if prev_sent is None or prev_recv is None:
+                    # First tick: no previous data for delta calculation
                     snap["net"]["sent_delta"] = None
                     snap["net"]["recv_delta"] = None
                 else:
                     ds = int(sent) - int(prev_sent)
                     dr = int(recv) - int(prev_recv)
 
-                    # Protección: counters pueden resetearse -> delta negativo
+                    # Protection: counters can reset => negative delta
                     if ds < 0:
-                        logging.warning("net.sent counter reset detectado; sent_delta=0")
+                        logging.warning("net.sent counter reset detected; sent_delta=0")
                         ds = 0
                     if dr < 0:
-                        logging.warning("net.recv counter reset detectado; recv_delta=0")
+                        logging.warning("net.recv counter reset detected; recv_delta=0")
                         dr = 0
 
                     snap["net"]["sent_delta"] = ds
@@ -97,17 +96,17 @@ def run(interval: int, duration: int, cfg: dict, db_path: str) -> dict:
                 prev_sent = int(sent)
                 prev_recv = int(recv)
 
-                # 3) Guardar
+                # Step 3: Save to database
                 storage.save_snapshot(db_path, snap)
                 snapshots_saved += 1
 
                 logging.info(f"tick={ticks} saved ts={snap.get('ts')}")
 
             except Exception as e:
-                # Resiliencia: el run sigue aunque un tick falle
+                # Resilience: run continues even if a tick fails
                 logging.error(f"tick={ticks} failed: {e}")
 
-            # 4) Ritmo (reduce drift)
+            # Step 4: Maintain rhythm (reduce drift)
             elapsed = time.monotonic() - tick_start
             sleep_s = interval - elapsed
             if sleep_s > 0:

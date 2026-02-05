@@ -1,15 +1,46 @@
-# src/analyzer.py
-# -*- coding: utf-8 -*-
+"""
+Statistical analysis and anomaly detection module.
+
+Responsibilities:
+- Calculate min/avg/max statistics for CPU, memory, and disk usage
+- Compute network totals from delta values
+- Detect anomalies based on configurable thresholds
+- Generate time series data for visualization
+
+The module processes snapshots from storage and produces a comprehensive
+analysis dictionary for the report generator.
+"""
+
 from __future__ import annotations
 from typing import Any
 
 def analyze(snapshots: list[dict], cfg: dict) -> dict:
+    """
+    Analyze a list of snapshots and detect anomalies.
+
+    Args:
+        snapshots: List of snapshot dictionaries from storage.
+        cfg: Configuration dictionary containing anomaly thresholds.
+
+    Returns:
+        Analysis dictionary containing:
+        - time_range: Start and end timestamps
+        - count: Number of snapshots analyzed
+        - metrics: Min/avg/max statistics for CPU, memory, disk
+        - disk: Last snapshot disk information
+        - net: Network totals calculated from deltas
+        - anomalies: List of detected anomalies with details
+        - last_snapshot: Most recent snapshot for reference
+        - series: Time series data for visualization
+    """
+    # Extract anomaly thresholds from configuration
     anomalies_cfg = (cfg or {}).get("anomalies") or {}
     cpu_hi = float(anomalies_cfg.get("cpu_percent_high", 90.0))
     mem_hi = float(anomalies_cfg.get("mem_percent_high", 90.0))
     net_hi = anomalies_cfg.get("net_delta_high", None)
     net_hi = None if net_hi is None else int(net_hi)
 
+    # Handle empty snapshot list
     if not snapshots:
         return {
             "time_range": {"start": None, "end": None},
@@ -27,6 +58,7 @@ def analyze(snapshots: list[dict], cfg: dict) -> dict:
         }
 
     def num(x: Any, default: float = 0.0) -> float:
+        """Convert value to float, returning default on error."""
         try:
             v = float(x)
             return v
@@ -34,6 +66,7 @@ def analyze(snapshots: list[dict], cfg: dict) -> dict:
             return float(default)
 
     def int_or_none(x: Any):
+        """Convert value to int, returning None on error."""
         if x is None:
             return None
         try:
@@ -41,7 +74,7 @@ def analyze(snapshots: list[dict], cfg: dict) -> dict:
         except Exception:
             return None
 
-    # asume cronológico (storage lo garantiza)
+    # Assume chronological order (storage guarantees this)
     start_ts = snapshots[0].get("ts")
     end_ts = snapshots[-1].get("ts")
 
@@ -54,6 +87,7 @@ def analyze(snapshots: list[dict], cfg: dict) -> dict:
     deltas_ignored = 0
     anomalies: list[dict] = []
 
+    # Process each snapshot
     for s in snapshots:
         ts = s.get("ts")
 
@@ -65,6 +99,7 @@ def analyze(snapshots: list[dict], cfg: dict) -> dict:
         mem_vals.append(mem_p)
         disk_vals.append(disk_p)
 
+        # Anomaly detection
         reasons: list[str] = []
         if cpu_p >= cpu_hi:
             reasons.append(f"cpu_percent_high (>= {cpu_hi})")
@@ -75,10 +110,11 @@ def analyze(snapshots: list[dict], cfg: dict) -> dict:
         ds = int_or_none(net.get("sent_delta"))
         dr = int_or_none(net.get("recv_delta"))
 
+        # Network delta processing
         if ds is None:
             deltas_ignored += 1
         else:
-            if ds < 0: ds = 0
+            if ds < 0: ds = 0  # Protect against negative deltas
             sent_total += ds
             if net_hi is not None and ds >= net_hi:
                 reasons.append(f"net_sent_delta_high (>= {net_hi})")
@@ -86,11 +122,12 @@ def analyze(snapshots: list[dict], cfg: dict) -> dict:
         if dr is None:
             deltas_ignored += 1
         else:
-            if dr < 0: dr = 0
+            if dr < 0: dr = 0  # Protect against negative deltas
             recv_total += dr
             if net_hi is not None and dr >= net_hi:
                 reasons.append(f"net_recv_delta_high (>= {net_hi})")
 
+        # Record anomaly if any threshold exceeded
         if reasons:
             anomalies.append({
                 "ts": ts,
@@ -103,6 +140,7 @@ def analyze(snapshots: list[dict], cfg: dict) -> dict:
             })
 
     def min_avg_max(vals: list[float]) -> dict:
+        """Calculate min, average, and max from a list of values."""
         if not vals:
             return {"min": None, "avg": None, "max": None}
         return {
@@ -111,6 +149,7 @@ def analyze(snapshots: list[dict], cfg: dict) -> dict:
             "max": max(vals),
         }
 
+    # Extract disk information from last snapshot
     last_disk = snapshots[-1].get("disk") or {}
     disk_path = last_disk.get("path")
     disk_last_percent = num(last_disk.get("percent"), 0.0)

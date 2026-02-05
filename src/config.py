@@ -1,30 +1,43 @@
-# src/config.py
-# -*- coding: utf-8 -*-
+"""
+Central configuration module for sys-snapshots-and-metrics.
+
+This module contains all application configuration as a single dictionary.
+No logic is executed here - only data definitions.
+
+Configuration sections:
+- db_path: SQLite database file location
+- disk_path: Disk partition to monitor
+- top_n_processes: Number of top processes to capture
+- anomalies: Threshold values for anomaly detection
+- reports: Report generation settings
+"""
 
 from __future__ import annotations
 
-# Configuración central (solo datos, sin lógica)
+# Central configuration dictionary (data only, no logic)
 CFG: dict = {
-    # Persistencia
+    # Database persistence
     "db_path": "snapshots.db",
 
-    # Collector
-    "disk_path": "C:\\",          # Windows default
-    "top_n_processes": 5,
+    # Collector settings
+    "disk_path": "C:\\",          # Windows default (use "/" for Unix-like systems)
+    "top_n_processes": 5,         # Number of top processes to capture per snapshot
 
-    # Analyzer (umbrales MVP)
+    # Analyzer thresholds (MVP)
     "anomalies": {
-        "cpu_percent_high": 90.0,
-        "mem_percent_high": 90.0,
-        # opcional: si no querés checkear red, poné None
-        "net_delta_high": None,
+        "cpu_percent_high": 90.0,      # CPU usage threshold (0-100)
+        "mem_percent_high": 90.0,      # Memory usage threshold (0-100)
+        # Optional: Set to None to disable network anomaly detection
+        # Set to an integer (bytes) to enable
+        "net_delta_high": None,        # Network delta threshold in bytes
     },
 
-    # Reportes
+    # Report generation settings
     "reports": {
-        "dir": "reports",          # carpeta en raíz
-        "default_name": "report.md",
-        # si True: nombre único por ejecución (report-YYYYMMDD-HHMMSS.md)
+        "dir": "reports",              # Output directory for reports (relative to project root)
+        "default_name": "report.md",   # Default report filename
+        # If True: generates unique timestamped filenames (report-YYYYMMDD-HHMMSS.md)
+        # If False: uses default_name (overwrites previous reports)
         "timestamped": False,
     },
 }

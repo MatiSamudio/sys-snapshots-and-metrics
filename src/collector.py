@@ -1,24 +1,22 @@
-# src/collector.py
-# -*- coding: utf-8 -*-
 """
-collector.py — Recolección de métricas (SOLO captura)
+System metrics collector module.
 
-Responsabilidad:
-- Leer el estado ACTUAL del sistema operativo y devolver un snapshot (dict).
-- NO guarda DB, NO calcula deltas, NO analiza, NO imprime.
+Responsibility:
+- Read the CURRENT state of the operating system and return a snapshot (dict)
+- Does NOT save to database, calculate deltas, analyze, or print
 
-Contrato (schema) del snapshot (NO cambiar sin consultar):
+Snapshot schema contract (do not change without consultation):
 
 snapshot = {
   "ts": "ISO timestamp",
   "hostname": "string",
   "os": {"name": "string", "release": "string"},
   "cpu": {"percent": float},                          # 0..100
-  "mem": {"total": int, "used": int, "percent": float},# bytes y 0..100
+  "mem": {"total": int, "used": int, "percent": float},# bytes and 0..100
   "disk": {"path": "string", "total": int, "used": int, "percent": float},
   "net": {
-    "sent": int, "recv": int,                          # counters absolutos
-    "sent_delta": None, "recv_delta": None             # deltas se calculan en runner
+    "sent": int, "recv": int,                          # absolute counters
+    "sent_delta": None, "recv_delta": None             # deltas calculated in runner
   },
   "top_processes": [
     {"pid": int, "name": str, "cpu_percent": float, "mem_rss": int}
@@ -34,25 +32,38 @@ import psutil
 
 
 def _default_disk_path() -> str:
-    """Devuelve un disk_path razonable según SO."""
+    """
+    Return a reasonable default disk path based on the operating system.
+
+    Returns:
+        "C:\\" for Windows, "/" for Unix-like systems.
+    """
     return "C:\\" if platform.system() == "Windows" else "/"
 
 
 def _iso_now() -> str:
-    """Timestamp ISO en UTC (Z)."""
+    """
+    Get current timestamp in ISO format (UTC with Z suffix).
+
+    Returns:
+        ISO 8601 formatted timestamp string.
+    """
     return datetime.now(timezone.utc).isoformat()
 
 def collect_snapshot(cfg: dict) -> dict:
     """
-    Función única de entrada para el sistema.
+    Main entry point for system metrics collection.
+
+    This function orchestrates the collection of all system metrics and
+    returns a complete snapshot conforming to the module's schema.
 
     Args:
-        cfg: dict con (mínimo):
-          - "disk_path": str (opcional)
-          - "top_n_processes": int (opcional)
+        cfg: Configuration dictionary with (minimum):
+          - "disk_path": str (optional) - disk path to monitor
+          - "top_n_processes": int (optional) - number of top processes to capture
 
     Returns:
-        snapshot dict completo y consistente con el schema.
+        Complete snapshot dictionary consistent with the schema.
     """
     snapshot = _collect_system(cfg)
 
@@ -64,12 +75,20 @@ def collect_snapshot(cfg: dict) -> dict:
 
 def _collect_system(cfg: dict) -> dict:
     """
-    Captura CPU/RAM/DISK/NET/metadata.
-    Nota: net.sent/net.recv son counters absolutos.
+    Capture CPU, RAM, disk, network, and system metadata.
+
+    Note: Network sent/recv are absolute counters. Deltas are calculated
+    by the runner module.
+
+    Args:
+        cfg: Configuration dictionary.
+
+    Returns:
+        Snapshot dictionary with system metrics.
     """
     disk_path = cfg.get("disk_path") or _default_disk_path()
 
-    # Estructura base cerrada (schema)
+    # Initialize base structure (closed schema)
     snapshot = {
         "ts": _iso_now(),
         "hostname": platform.node() or "unknown",
@@ -81,7 +100,7 @@ def _collect_system(cfg: dict) -> dict:
         "top_processes": [],
     }
 
-    # CPU: no bloquear el programa (interval=None -> lectura no bloqueante)
+    # CPU: Non-blocking read (interval=None => instant reading)
     try:
         snapshot["cpu"]["percent"] = float(psutil.cpu_percent(interval=None))
     except Exception:
@@ -96,7 +115,7 @@ def _collect_system(cfg: dict) -> dict:
     except Exception:
         snapshot["mem"] = {"total": 0, "used": 0, "percent": 0.0}
 
-    # Disco
+    # Disk
     try:
         d = psutil.disk_usage(disk_path)
         snapshot["disk"]["path"] = str(disk_path)
@@ -106,18 +125,18 @@ def _collect_system(cfg: dict) -> dict:
     except Exception:
         snapshot["disk"] = {"path": str(disk_path), "total": 0, "used": 0, "percent": 0.0}
 
-    # Red (counters absolutos)
+    # Network (absolute counters)
     try:
         n = psutil.net_io_counters()
         snapshot["net"]["sent"] = int(n.bytes_sent)
         snapshot["net"]["recv"] = int(n.bytes_recv)
-        # deltas siempre None aquí (runner los completa)
+        # Deltas always None here (runner fills them in)
         snapshot["net"]["sent_delta"] = None
         snapshot["net"]["recv_delta"] = None
     except Exception:
         snapshot["net"] = {"sent": 0, "recv": 0, "sent_delta": None, "recv_delta": None}
 
-    # Normalización mínima (rangos)
+    # Minimal normalization (ensure valid ranges)
     snapshot["cpu"]["percent"] = _clamp_percent(snapshot["cpu"]["percent"])
     snapshot["mem"]["percent"] = _clamp_percent(snapshot["mem"]["percent"])
     snapshot["disk"]["percent"] = _clamp_percent(snapshot["disk"]["percent"])
@@ -126,7 +145,15 @@ def _collect_system(cfg: dict) -> dict:
 
 
 def _clamp_percent(x: float) -> float:
-    """Asegura 0..100 y float."""
+    """
+    Ensure percentage value is within 0..100 range and is a float.
+
+    Args:
+        x: Value to clamp.
+
+    Returns:
+        Clamped float value between 0.0 and 100.0.
+    """
     try:
         v = float(x)
     except Exception:
@@ -140,13 +167,20 @@ def _clamp_percent(x: float) -> float:
 
 def collect_top_processes(top_n: int) -> list[dict]:
     """
-    Top N procesos (best-effort) sin bloquear (sin interval por proceso).
-    Diseñado para ser rápido y tolerante a permisos.
+    Collect top N processes by CPU and memory usage (best-effort, non-blocking).
 
-    Estrategia MVP:
-    - Captura cpu_percent "instantáneo" (puede ser 0 si no hubo warmup)
-    - Captura mem_rss
-    - Ordena por (cpu_percent desc, mem_rss desc)
+    Designed to be fast and tolerant of permission issues.
+
+    Strategy:
+    - Captures "instant" cpu_percent (may be 0 if no warmup data)
+    - Captures memory RSS
+    - Sorts by (cpu_percent desc, mem_rss desc)
+
+    Args:
+        top_n: Number of top processes to return.
+
+    Returns:
+        List of process dictionaries, sorted by resource usage.
     """
     if top_n <= 0:
         return []
@@ -158,7 +192,7 @@ def collect_top_processes(top_n: int) -> list[dict]:
             pid = int(proc.info["pid"])
             name = proc.info["name"] or "unknown"
 
-            # cpu_percent(None): no bloquea; puede dar 0 si no hay datos previos
+            # cpu_percent(None): non-blocking; may return 0 if no prior data
             cpu = float(proc.cpu_percent(interval=None))
             mem_rss = int(proc.memory_info().rss)
 
@@ -166,11 +200,13 @@ def collect_top_processes(top_n: int) -> list[dict]:
                 {"pid": pid, "name": name, "cpu_percent": cpu if cpu >= 0 else 0.0, "mem_rss": mem_rss if mem_rss >= 0 else 0}
             )
         except (psutil.NoSuchProcess, psutil.AccessDenied):
+            # Process terminated or access denied - skip
             continue
         except Exception:
+            # Any other error - skip this process
             continue
 
-    # Ordenar por CPU y RAM
+    # Sort by CPU and RAM usage (descending)
     procs.sort(key=lambda p: (p["cpu_percent"], p["mem_rss"]), reverse=True)
     return procs[:top_n]
 

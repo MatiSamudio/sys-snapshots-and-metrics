@@ -1,13 +1,14 @@
-# src/report.py
-# -*- coding: utf-8 -*-
 """
-report.py — Reporte
+Report generation module for system metrics analysis.
 
-Contrato:
-- NO ejecuta nada al import.
-- NO lee DB.
-- write_report(analysis, out_path): escribe Markdown
-- write_report_html(md_path, html_path): convierte MD a HTML y lo escribe
+Contract:
+- Does NOT execute anything on import
+- Does NOT read from database
+- write_report(analysis, out_path): Writes Markdown report
+- write_report_html(md_path, html_path): Converts Markdown to HTML
+
+The module generates comprehensive reports with tables, charts, and anomaly
+detection results in both Markdown and HTML formats.
 """
 
 from __future__ import annotations
@@ -17,6 +18,15 @@ from typing import Any
 
 
 def write_report(analysis: dict, out_path: str) -> None:
+    """
+    Write a Markdown report from analysis results.
+
+    Optionally generates a PNG chart if sufficient data is available.
+
+    Args:
+        analysis: Analysis dictionary from analyzer module.
+        out_path: Output file path for the Markdown report.
+    """
     out = Path(out_path)
 
     chart_name = _maybe_write_chart_png(analysis or {}, out)
@@ -28,15 +38,20 @@ def write_report(analysis: dict, out_path: str) -> None:
 
 def write_report_html(md_path: str, html_path: str) -> None:
     """
-    Convierte un .md existente a HTML y lo guarda.
-    Requiere: pip install markdown
+    Convert an existing Markdown file to HTML and save it.
+
+    Requires: pip install markdown
+
+    Args:
+        md_path: Path to the source Markdown file.
+        html_path: Path to the output HTML file.
     """
     md_file = Path(md_path)
     html_file = Path(html_path)
 
     text = md_file.read_text(encoding="utf-8")
 
-    # Render real de Markdown
+    # Render Markdown to HTML
     import markdown as md
     body = md.markdown(
         text,
@@ -68,6 +83,18 @@ def write_report_html(md_path: str, html_path: str) -> None:
 
 
 def _maybe_write_chart_png(analysis: dict, out: Path) -> str | None:
+    """
+    Generate a PNG bar chart comparing average vs max resource usage.
+
+    Only generates if sufficient data is available.
+
+    Args:
+        analysis: Analysis dictionary.
+        out: Output path for the report (used to derive chart filename).
+
+    Returns:
+        Chart filename if generated, None otherwise.
+    """
     count = int(analysis.get("count", 0) or 0)
     if count <= 0:
         return None
@@ -77,6 +104,7 @@ def _maybe_write_chart_png(analysis: dict, out: Path) -> str | None:
     mem = metrics.get("mem_percent") or {}
     disk = metrics.get("disk_percent") or {}
 
+    # Verify all required metrics are available
     if cpu.get("avg") is None or cpu.get("max") is None:
         return None
     if mem.get("avg") is None or mem.get("max") is None:
@@ -85,13 +113,14 @@ def _maybe_write_chart_png(analysis: dict, out: Path) -> str | None:
         return None
 
     import matplotlib
-    matplotlib.use("Agg")
+    matplotlib.use("Agg")  # Use non-interactive backend
     import matplotlib.pyplot as plt
 
     labels = ["CPU", "Memory", "Disk"]
     avg_values = [float(cpu["avg"]), float(mem["avg"]), float(disk["avg"])]
     max_values = [float(cpu["max"]), float(mem["max"]), float(disk["max"])]
 
+    # Derive chart filename from report path
     png_path = out.with_suffix("")  # report.md -> report
     png_file = f"{png_path.name}_resources.png"
     png_full = out.parent / png_file
@@ -99,6 +128,7 @@ def _maybe_write_chart_png(analysis: dict, out: Path) -> str | None:
     x = [0, 1, 2]
     width = 0.35
 
+    # Create bar chart
     fig, ax = plt.subplots()
     ax.bar([i - width / 2 for i in x], avg_values, width, label="Average")
     ax.bar([i + width / 2 for i in x], max_values, width, label="Max")
@@ -117,6 +147,16 @@ def _maybe_write_chart_png(analysis: dict, out: Path) -> str | None:
 
 
 def _render_markdown(analysis: dict, chart_name: str | None) -> str:
+    """
+    Render analysis results as Markdown text.
+
+    Args:
+        analysis: Analysis dictionary from analyzer.
+        chart_name: Optional chart filename to embed.
+
+    Returns:
+        Complete Markdown document as string.
+    """
     tr = analysis.get("time_range") or {}
     count = int(analysis.get("count", 0) or 0)
 
@@ -133,7 +173,6 @@ def _render_markdown(analysis: dict, chart_name: str | None) -> str:
     lines: list[str] = []
     lines.append("# System snapshots report")
     lines.append("")
-    # ASCII estable
     lines.append(f"- Time range: `{tr.get('start')}` -> `{tr.get('end')}`")
     lines.append(f"- Snapshots analyzed: **{count}**")
     lines.append("")
@@ -235,7 +274,20 @@ def _render_markdown(analysis: dict, chart_name: str | None) -> str:
     return "\n".join(lines)
 
 
+# =========================================================
+# Formatting Utilities
+# =========================================================
+
 def fmt_num(x: Any) -> str:
+    """
+    Format a number to 2 decimal places.
+
+    Args:
+        x: Value to format.
+
+    Returns:
+        Formatted string, or "-" if conversion fails.
+    """
     if x is None:
         return "-"
     try:
@@ -245,6 +297,15 @@ def fmt_num(x: Any) -> str:
 
 
 def fmt_bytes(x: Any) -> str:
+    """
+    Format bytes with appropriate unit (B, KB, MB, GB, TB, PB).
+
+    Args:
+        x: Byte value to format.
+
+    Returns:
+        Formatted string with unit, or "-" if conversion fails.
+    """
     if x is None:
         return "-"
     try:
@@ -265,6 +326,16 @@ def fmt_bytes(x: Any) -> str:
 
 
 def int_or(x: Any, default: int = 0) -> int:
+    """
+    Convert value to int, returning default on error.
+
+    Args:
+        x: Value to convert.
+        default: Default value if conversion fails.
+
+    Returns:
+        Integer value or default.
+    """
     try:
         return int(x)
     except Exception:
@@ -272,6 +343,15 @@ def int_or(x: Any, default: int = 0) -> int:
 
 
 def safe(x: Any) -> str:
+    """
+    Safely convert value to string, handling None and newlines.
+
+    Args:
+        x: Value to convert.
+
+    Returns:
+        Safe string representation, or "unknown" if None/empty.
+    """
     if x is None:
         return "unknown"
     s = str(x)
